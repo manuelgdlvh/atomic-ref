@@ -2,5 +2,15 @@
 name = "atomic-ref"
 version = "0.1.0"
 edition = "2024"
+resolver = "3"
 
 [dependencies]
+crossbeam-utils = "0.8.21"
+
+[lib]
+name = "lib"
+path = "src/lib.rs"
+
+[[example]]
+name = "example-test"
+path = "examples/example.rs"
