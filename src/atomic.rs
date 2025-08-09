@@ -4,7 +4,7 @@ use crate::mem::deallocate;
 use crate::value_ref::{ValueRef, ValueRefInner};
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicPtr, Ordering};
-
+use crate::access::lock::LockAccessControl;
 // TODO: Add most significant bit to known if initialized Wait / Notify mechanism
 
 pub struct Atomic<T, A>
@@ -42,6 +42,15 @@ impl<T: Debug> Atomic<T, CASAccessControl> {
         Atomic {
             current: AtomicPtr::new(ValueRefInner::raw(value, 0)),
             control: CASAccessControl::default(),
+        }
+    }
+}
+
+impl<T: Debug> Atomic<T, LockAccessControl> {
+    pub fn new_lock(value: T) -> Atomic<T, LockAccessControl> {
+        Atomic {
+            current: AtomicPtr::new(ValueRefInner::raw(value, 0)),
+            control: LockAccessControl::default(),
         }
     }
 }
