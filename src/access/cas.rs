@@ -1,6 +1,7 @@
 use crate::access::access::{AccessGuard, AtomicAccessControl};
-use crossbeam_utils::Backoff;
-use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::sync::Contender;
+use crate::sync::{AtomicU64, Ordering};
 
 impl AccessGuard for CASReadGuard<'_> {}
 impl AccessGuard for CASWriteGuard<'_> {}
@@ -65,34 +66,17 @@ pub struct CASAccessControl {
 impl AtomicAccessControl for CASAccessControl {
     fn write(&self) -> impl AccessGuard {
         let mut flags = self.flags.load(Ordering::SeqCst);
-        let mut backoff: Option<Backoff> = None;
+        let mut backoff: Option<Contender> = None;
 
-        let mut is_pending = false;
         loop {
             let readers = flags & Self::NUM_READERS_MASK;
             let writers = (flags & Self::NUM_WRITERS_MASK) >> Self::WRITERS_BITS_SHIFT;
 
             if readers > 0 || writers > 0 {
                 if backoff.is_none() {
-                    backoff = Some(Backoff::new());
+                    backoff = Some(Contender::new());
                 }
 
-                // TODO: Add when there is high contention in block below?. Its needed atomically query when there are pending or not? to separate in a other cache-padded variable
-                if !is_pending {
-                    let pending_writers = (((flags & Self::PENDING_NUM_WRITERS_MASK)
-                        >> Self::PENDING_WRITERS_BITS_SHIFT)
-                        + 1)
-                        << Self::PENDING_WRITERS_BITS_SHIFT;
-                    is_pending = self
-                        .flags
-                        .compare_exchange(
-                            flags,
-                            (flags & !Self::PENDING_NUM_WRITERS_MASK) | pending_writers,
-                            Ordering::Relaxed,
-                            Ordering::Relaxed,
-                        )
-                        .is_ok();
-                }
 
                 let backoff_mut_ref = unsafe { backoff.as_mut().unwrap_unchecked() };
                 if backoff_mut_ref.is_completed() {
@@ -106,14 +90,7 @@ impl AtomicAccessControl for CASAccessControl {
                     >> Self::WRITERS_BITS_SHIFT)
                     + 1)
                     << Self::WRITERS_BITS_SHIFT;
-                let mut new_flags = (flags & !CASAccessControl::NUM_WRITERS_MASK) | writers;
-                if is_pending {
-                    let pending_readers = (((flags & Self::PENDING_NUM_READERS_MASK)
-                        >> Self::PENDING_READERS_BITS_SHIFT)
-                        + 1)
-                        << Self::PENDING_READERS_BITS_SHIFT;
-                    new_flags = (new_flags & !Self::PENDING_NUM_READERS_MASK) | pending_readers;
-                }
+                let new_flags = (flags & !CASAccessControl::NUM_WRITERS_MASK) | writers;
 
                 if let Err(err_flags) = self.flags.compare_exchange(
                     flags,
@@ -137,31 +114,14 @@ impl AtomicAccessControl for CASAccessControl {
 
     fn read(&self) -> impl AccessGuard {
         let mut flags = self.flags.load(Ordering::SeqCst);
-        let mut backoff: Option<Backoff> = None;
+        let mut backoff: Option<Contender> = None;
 
         // Remove from pending when successful (else branch)
-        let mut is_pending = false;
         loop {
             let writers = (flags & Self::NUM_WRITERS_MASK) >> Self::WRITERS_BITS_SHIFT;
             if writers > 0 {
                 if backoff.is_none() {
-                    backoff = Some(Backoff::new());
-                }
-
-                if !is_pending {
-                    let pending_readers = (((flags & Self::PENDING_NUM_READERS_MASK)
-                        >> Self::PENDING_READERS_BITS_SHIFT)
-                        + 1)
-                        << Self::PENDING_READERS_BITS_SHIFT;
-                    is_pending = self
-                        .flags
-                        .compare_exchange(
-                            flags,
-                            (flags & !Self::PENDING_NUM_READERS_MASK) | pending_readers,
-                            Ordering::Relaxed,
-                            Ordering::Relaxed,
-                        )
-                        .is_ok();
+                    backoff = Some(Contender::new());
                 }
 
                 let backoff_mut_ref = unsafe { backoff.as_mut().unwrap_unchecked() };
@@ -173,14 +133,7 @@ impl AtomicAccessControl for CASAccessControl {
                 flags = self.flags.load(Ordering::SeqCst);
             } else {
                 let readers = (flags & Self::NUM_READERS_MASK) + 1;
-                let mut new_flags = (flags & !CASAccessControl::NUM_READERS_MASK) | readers;
-                if is_pending {
-                    let pending_readers = (((flags & Self::PENDING_NUM_READERS_MASK)
-                        >> Self::PENDING_READERS_BITS_SHIFT)
-                        + 1)
-                        << Self::PENDING_READERS_BITS_SHIFT;
-                    new_flags = (new_flags & !Self::PENDING_NUM_READERS_MASK) | pending_readers;
-                }
+                let new_flags = (flags & !CASAccessControl::NUM_READERS_MASK) | readers;
 
                 if let Err(err_flags) = self.flags.compare_exchange(
                     flags,

@@ -1,0 +1,36 @@
+permissions:
+  contents: read
+on:
+  push:
+    branches: [master]
+  pull_request:
+# Spend CI time only on latest ref: https://github.com/jonhoo/rust-ci-conf/pull/5
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+name: safety
+jobs:
+  loom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: cargo test
+        run: cargo test --release -- --test-threads=1
+        env:
+          LOOM_MAX_PREEMPTIONS: 3
+          RUSTFLAGS: "--cfg loom"
+
+  integration-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: cargo test
+        run: cargo test --release -- --test-threads=1
