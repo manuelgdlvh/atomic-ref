@@ -56,7 +56,7 @@ jobs:
       - name: Install stable
         uses: dtolnay/rust-toolchain@stable
       - name: cargo test
-        run: cargo test --release -- --test-thread=1
+        run: cargo test --release -- --test-threads=1
         env:
           LOOM_MAX_PREEMPTIONS: 3
           RUSTFLAGS: "--cfg loom"
@@ -70,4 +70,4 @@ jobs:
       - name: Install stable
         uses: dtolnay/rust-toolchain@stable
       - name: cargo test
-        run: cargo test --release -- --test-thread=1
+        run: cargo test --release -- --test-threads=1
