@@ -1,5 +1,5 @@
 use crate::access::access::{AccessGuard, AtomicAccessControl};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use crate::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Default)]
 pub struct LockAccessControl {

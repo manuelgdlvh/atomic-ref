@@ -1,9 +1,11 @@
 use crate::access::access::AtomicAccessControl;
 use crate::access::cas::CASAccessControl;
 use crate::mem::deallocate;
+use crate::sync::fence;
+use crate::sync::{AtomicPtr, Ordering};
 use crate::value_ref::{ValueRef, ValueRefInner};
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicPtr, Ordering};
+
 use crate::access::lock::LockAccessControl;
 // TODO: Add most significant bit to known if initialized Wait / Notify mechanism
 
@@ -71,6 +73,8 @@ impl<T: Debug, A: AtomicAccessControl> Atomic<T, A> {
     {
         let version = self.control.increment_version();
         let guard_ = self.control.write();
+
+        fence(Ordering::SeqCst);
 
         let current_ptr = self.current.load(Ordering::SeqCst);
         let current_val = unsafe { &current_ptr.as_ref().unwrap_unchecked().data };

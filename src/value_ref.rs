@@ -1,5 +1,6 @@
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicU16, Ordering};
+
+use crate::sync::{AtomicU16, Ordering};
 
 #[derive(Debug)]
 pub struct ValueRefInner<T> {
