@@ -87,7 +87,9 @@ fn execute<T: Clone + Debug + 'static, A: AtomicAccessControl + Send + Sync + 's
     stop_fn: fn(ValueRef<T>, u64) -> bool,
     write_fn: fn(&T) -> T,
 ) -> T {
-    //GLOBAL_ALLOCATOR.reset();
+
+    #[cfg(not(loom))]
+    GLOBAL_ALLOCATOR.reset();
 
     let target = Arc::new(target);
     let total_writes: u64 = num_writers as u64 * num_worker_writes;
@@ -108,12 +110,12 @@ fn execute<T: Clone + Debug + 'static, A: AtomicAccessControl + Send + Sync + 's
     let result = target.read().get().clone();
     drop(target);
 
-    /*
-        assert_eq!(
+    #[cfg(not(loom))]
+    assert_eq!(
         GLOBAL_ALLOCATOR.allocs.load(Ordering::Relaxed) + EXTRA_ALLOCS,
         GLOBAL_ALLOCATOR.deallocs.load(Ordering::Relaxed)
     );
-     */
+
 
     result
 }
@@ -163,13 +165,7 @@ fn init_readers<T: Debug + 'static, A: AtomicAccessControl + Send + Sync + 'stat
         .collect::<Vec<_>>()
 }
 
-/*
 #[cfg(not(loom))]
-
-#[global_allocator]
-pub static GLOBAL_ALLOCATOR: CountingAllocator = CountingAllocator::new();
- */
-
 #[derive(Debug)]
 pub struct CountingAllocator {
     pub allocs: AtomicUsize,
@@ -178,8 +174,14 @@ pub struct CountingAllocator {
     pub bytes_deallocated: AtomicUsize,
 }
 
+
+#[cfg(not(loom))]
+#[global_allocator]
+pub static GLOBAL_ALLOCATOR: CountingAllocator = CountingAllocator::new();
+
+#[cfg(not(loom))]
 impl CountingAllocator {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         CountingAllocator {
             allocs: AtomicUsize::new(0),
             deallocs: AtomicUsize::new(0),
@@ -195,6 +197,8 @@ impl CountingAllocator {
         self.bytes_deallocated.store(0, Ordering::SeqCst);
     }
 }
+
+#[cfg(not(loom))]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         self.allocs.fetch_add(1, Ordering::SeqCst);
