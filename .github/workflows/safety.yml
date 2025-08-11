@@ -71,8 +71,8 @@ jobs:
           submodules: true
       - name: Install stable
         uses: dtolnay/rust-toolchain@stable
-      - name: cargo test --test loom
-        run: cargo test --release --test loom
+      - name: cargo test --test
+        run: cargo test --release --test
         env:
           LOOM_MAX_PREEMPTIONS: 3
           RUSTFLAGS: "--cfg loom"
