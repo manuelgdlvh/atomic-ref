@@ -38,6 +38,8 @@ proptest! {
     #[cfg(not(loom))]
     #[test]
     fn test_atomic_lock_memory_free(num_readers in 1u8..6, num_writers in 1u8..6, num_worker_writes in 100u64..10000) {
+        execute_u64(Atomic::new_lock(0), num_readers, num_writers, num_worker_writes)
+
     }
 
     #[cfg(not(loom))]
@@ -74,7 +76,7 @@ fn execute_u64<A: AtomicAccessControl + Send + Sync + 'static>(
         write_fn,
     );
 
-    //assert_eq!(num_writers as u64 * num_worker_writes, result)
+    assert_eq!(num_writers as u64 * num_worker_writes, result)
 }
 
 fn execute<T: Clone + Debug + 'static, A: AtomicAccessControl + Send + Sync + 'static>(
