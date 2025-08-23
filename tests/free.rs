@@ -1,7 +1,6 @@
 use lib::access::access::AtomicAccessControl;
 use lib::atomic::Atomic;
 use lib::value_ref::ValueRef;
-use proptest::proptest;
 use std::alloc::{GlobalAlloc, System};
 use std::fmt::Debug;
 
@@ -14,9 +13,6 @@ use std::sync::Arc;
 #[cfg(not(loom))]
 use std::thread;
 
-#[cfg(not(loom))]
-use std::thread::JoinHandle;
-
 #[cfg(loom)]
 pub(crate) use loom::alloc::Layout;
 #[cfg(loom)]
@@ -27,6 +23,9 @@ use loom::sync::Arc;
 use loom::thread;
 #[cfg(loom)]
 use loom::thread::JoinHandle;
+use proptest::proptest;
+#[cfg(not(loom))]
+use std::thread::JoinHandle;
 
 // Due to proptest allocations
 const EXTRA_ALLOCS: usize = 1;
@@ -45,7 +44,7 @@ proptest! {
     #[cfg(not(loom))]
     #[test]
     fn test_atomic_cas_memory_free(num_readers in 1u8..6, num_writers in 1u8..6, num_worker_writes in 100u64..10000) {
-    execute_u64(Atomic::new_cas(0), num_readers, num_writers, num_worker_writes)
+    execute_u64(Atomic::new_cas(0, num_writers as u16), num_readers, num_writers, num_worker_writes)
     }
 
 }
@@ -87,7 +86,6 @@ fn execute<T: Clone + Debug + 'static, A: AtomicAccessControl + Send + Sync + 's
     stop_fn: fn(ValueRef<T>, u64) -> bool,
     write_fn: fn(&T) -> T,
 ) -> T {
-
     #[cfg(not(loom))]
     GLOBAL_ALLOCATOR.reset();
 
@@ -99,7 +97,7 @@ fn execute<T: Clone + Debug + 'static, A: AtomicAccessControl + Send + Sync + 's
         num_worker_writes,
         write_fn,
     );
-    let readers = init_readers(Arc::clone(&target), num_readers, total_writes, stop_fn, 100);
+    let readers = init_readers(Arc::clone(&target), num_readers, total_writes, stop_fn);
     readers.into_iter().for_each(|handle| {
         let _ = handle.join();
     });
@@ -115,7 +113,6 @@ fn execute<T: Clone + Debug + 'static, A: AtomicAccessControl + Send + Sync + 's
         GLOBAL_ALLOCATOR.allocs.load(Ordering::Relaxed) + EXTRA_ALLOCS,
         GLOBAL_ALLOCATOR.deallocs.load(Ordering::Relaxed)
     );
-
 
     result
 }
@@ -147,19 +144,21 @@ fn init_readers<T: Debug + 'static, A: AtomicAccessControl + Send + Sync + 'stat
     num: u8,
     total_writes: u64,
     stop_fn: fn(ValueRef<T>, u64) -> bool,
-    sleep_ms: u64,
 ) -> Vec<JoinHandle<()>> {
     (0..num)
-        .map(|_| {
+        .map(|idx| {
             let target = Arc::clone(&target);
             thread::spawn(move || {
+                let mut i = 0;
                 loop {
                     if stop_fn(target.read(), total_writes) {
                         break;
                     }
-
+                    i += 1;
                     thread::yield_now();
                 }
+
+                println!("#{} Read Worker finished!. Reads: {}", idx, i);
             })
         })
         .collect::<Vec<_>>()
@@ -173,7 +172,6 @@ pub struct CountingAllocator {
     pub bytes_allocated: AtomicUsize,
     pub bytes_deallocated: AtomicUsize,
 }
-
 
 #[cfg(not(loom))]
 #[global_allocator]

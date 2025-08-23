@@ -1,13 +1,11 @@
 use crate::access::access::AtomicAccessControl;
 use crate::access::cas::CASAccessControl;
 use crate::mem::deallocate;
-use crate::sync::fence;
 use crate::sync::{AtomicPtr, Ordering};
 use crate::value_ref::{ValueRef, ValueRefInner};
 use std::fmt::Debug;
 
 use crate::access::lock::LockAccessControl;
-// TODO: Add most significant bit to known if initialized Wait / Notify mechanism
 
 pub struct Atomic<T, A>
 where
@@ -40,10 +38,10 @@ where
 }
 
 impl<T: Debug> Atomic<T, CASAccessControl> {
-    pub fn new_cas(value: T) -> Atomic<T, CASAccessControl> {
+    pub fn new_cas(value: T, max_write_line: u16) -> Atomic<T, CASAccessControl> {
         Atomic {
-            current: AtomicPtr::new(ValueRefInner::raw(value, 0)),
-            control: CASAccessControl::default(),
+            current: AtomicPtr::new(ValueRefInner::raw(value)),
+            control: CASAccessControl::new(max_write_line),
         }
     }
 }
@@ -51,13 +49,11 @@ impl<T: Debug> Atomic<T, CASAccessControl> {
 impl<T: Debug> Atomic<T, LockAccessControl> {
     pub fn new_lock(value: T) -> Atomic<T, LockAccessControl> {
         Atomic {
-            current: AtomicPtr::new(ValueRefInner::raw(value, 0)),
+            current: AtomicPtr::new(ValueRefInner::raw(value)),
             control: LockAccessControl::default(),
         }
     }
 }
-
-// TODO: Configuration to max in a row writes and reads when there are pending inverse operations to avoid starvation
 
 impl<T: Debug, A: AtomicAccessControl> Atomic<T, A> {
     pub fn read(&self) -> ValueRef<T> {
@@ -71,15 +67,12 @@ impl<T: Debug, A: AtomicAccessControl> Atomic<T, A> {
     where
         F: Fn(&T) -> T,
     {
-        let version = self.control.increment_version();
         let guard_ = self.control.write();
-
-        fence(Ordering::SeqCst);
 
         let current_ptr = self.current.load(Ordering::SeqCst);
         let current_val = unsafe { &current_ptr.as_ref().unwrap_unchecked().data };
         let new_val = update_fn(current_val);
-        let new_ptr = ValueRefInner::raw(new_val, version);
+        let new_ptr = ValueRefInner::raw(new_val);
 
         let old_ptr = self.current.swap(new_ptr, Ordering::SeqCst);
 

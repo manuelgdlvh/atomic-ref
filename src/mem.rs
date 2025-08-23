@@ -1,8 +1,8 @@
 // Flags for InFlightRefs and version
 
+use crate::sync::Layout;
 use crate::sync::alloc;
 use crate::sync::dealloc;
-use crate::sync::Layout;
 use std::ptr;
 
 pub fn allocate<I>(value: I) -> *mut I {
