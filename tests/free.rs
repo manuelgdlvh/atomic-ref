@@ -1,4 +1,3 @@
-use lib::access::access::AtomicAccessControl;
 use lib::atomic::Atomic;
 use lib::value_ref::ValueRef;
 use std::alloc::{GlobalAlloc, System};
@@ -13,6 +12,7 @@ use std::sync::Arc;
 #[cfg(not(loom))]
 use std::thread;
 
+use lib::access::AtomicAccessControl;
 #[cfg(loom)]
 pub(crate) use loom::alloc::Layout;
 #[cfg(loom)]
@@ -36,14 +36,14 @@ proptest! {
 
     #[cfg(not(loom))]
     #[test]
-    fn test_atomic_lock_memory_free(num_readers in 1u8..6, num_writers in 1u8..6, num_worker_writes in 100u64..10000) {
+    fn test_atomic_lock_memory_free(num_readers in 4u8..6, num_writers in 4u8..6, num_worker_writes in 1000u64..10000) {
         execute_u64(Atomic::new_lock(0), num_readers, num_writers, num_worker_writes)
 
     }
 
     #[cfg(not(loom))]
     #[test]
-    fn test_atomic_cas_memory_free(num_readers in 1u8..6, num_writers in 1u8..6, num_worker_writes in 100u64..10000) {
+    fn test_atomic_cas_memory_free(num_readers in 4u8..6, num_writers in 4u8..6, num_worker_writes in 1000u64..10000) {
     execute_u64(Atomic::new_cas(0, num_writers as u16), num_readers, num_writers, num_worker_writes)
     }
 

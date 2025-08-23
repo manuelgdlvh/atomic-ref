@@ -7,8 +7,6 @@ pub(crate) use std::alloc::Layout;
 #[cfg(not(loom))]
 pub(crate) use std::alloc::{alloc, dealloc};
 
-#[cfg(not(loom))]
-pub(crate) use std::sync::atomic::fence;
 
 #[cfg(not(loom))]
 pub(crate) type Contender = crossbeam_utils::Backoff;

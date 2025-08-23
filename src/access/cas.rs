@@ -1,4 +1,4 @@
-use crate::access::access::{AccessGuard, AtomicAccessControl};
+use crate::access::{AccessGuard, AtomicAccessControl};
 use crate::sync::Contender;
 use crate::sync::{AtomicU64, Ordering};
 use crossbeam_utils::CachePadded;
@@ -106,20 +106,11 @@ impl CASAccessControl {
     }
 
     fn try_reserve_write_slot(&self) -> Option<u16> {
-        if let Ok(current_slot) =
-            self.write_slots
-                .fetch_update(Ordering::Release, Ordering::Acquire, |slots| {
-                    if slots == 0 {
-                        None
-                    } else {
-                        Some(slots - 1)
-                    }
-                })
-        {
-            Some(current_slot)
-        } else {
-            None
-        }
+        self.write_slots
+            .fetch_update(Ordering::Release, Ordering::Acquire, |slots| {
+                if slots == 0 { None } else { Some(slots - 1) }
+            })
+            .ok()
     }
 
     fn try_reserve_read_slot(&self) -> bool {

@@ -1,4 +1,4 @@
-use crate::access::access::{AccessGuard, AtomicAccessControl};
+use crate::access::{AccessGuard, AtomicAccessControl};
 use crate::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Default)]
