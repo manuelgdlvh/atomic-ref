@@ -1,7 +1,8 @@
 use crate::access::access::{AccessGuard, AtomicAccessControl};
-
 use crate::sync::Contender;
 use crate::sync::{AtomicU64, Ordering};
+use crossbeam_utils::CachePadded;
+use std::sync::atomic::{AtomicBool, AtomicU16};
 
 impl AccessGuard for CASReadGuard<'_> {}
 impl AccessGuard for CASWriteGuard<'_> {}
@@ -17,14 +18,12 @@ impl<'a> CASReadGuard<'a> {
 impl Drop for CASReadGuard<'_> {
     fn drop(&mut self) {
         self.access_control_ref
-            .flags
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
-                let readers_flag = (current & CASAccessControl::NUM_READERS_MASK) - 1;
-                let current = current & !CASAccessControl::NUM_READERS_MASK;
-                let result = current | readers_flag;
-                Some(result)
+            .read_flags
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
+                let readers_flag = (old & 0x0000_0000_0000_FFFF) - 1;
+                Some((old & !0x0000_0000_0000_FFFF) | readers_flag)
             })
-            .expect("Always readers must be decremented");
+            .expect("Always pending writers must be incremented");
     }
 }
 
@@ -40,132 +39,261 @@ impl<'a> CASWriteGuard<'a> {
 }
 impl Drop for CASWriteGuard<'_> {
     fn drop(&mut self) {
-        self.access_control_ref
-            .flags
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
-                let writers_flag = (((current & CASAccessControl::NUM_WRITERS_MASK)
-                    >> CASAccessControl::WRITERS_BITS_SHIFT)
-                    - 1)
-                    << CASAccessControl::WRITERS_BITS_SHIFT;
-                let current = current & !CASAccessControl::NUM_WRITERS_MASK;
-                let result = current | writers_flag;
-                Some(result)
-            })
-            .expect("Always writers must be decremented");
+        let old = self
+            .access_control_ref
+            .next_writer_id
+            .fetch_sub(1, Ordering::SeqCst);
+
+        // Last Writer.
+        if old == 1 {
+            // Reset
+            self.access_control_ref
+                .write_slots
+                .store(0, Ordering::SeqCst);
+
+            self.access_control_ref
+                .is_writing
+                .store(false, Ordering::SeqCst);
+        }
     }
 }
 
-#[derive(Default)]
 pub struct CASAccessControl {
-    flags: AtomicU64,
+    // Holding Current Readers (first 16 bits) , Pending Readers (next 16 bits) and guaranteed read slots (most significant 32bits)
+    read_flags: CachePadded<AtomicU64>,
+
+    // Track how much writers can write in a row. The 1 slot is the initiator.
+    // The initiator is the last executed, and put is_writing to false and initialize the force_read_slots.
+    write_slots: CachePadded<AtomicU16>,
+    next_writer_id: CachePadded<AtomicU16>,
+    pending_writers: CachePadded<AtomicU16>,
+    is_writing: CachePadded<AtomicBool>,
+    max_write_line: u16,
 }
 
-// TODO: Change the Ordering modes.
-
-// TODO: Hybrid mechanism with blocking in case of high contention
-impl AtomicAccessControl for CASAccessControl {
-    fn write(&self) -> impl AccessGuard {
-        let mut flags = self.flags.load(Ordering::SeqCst);
-        let mut backoff: Option<Contender> = None;
-
-        loop {
-            let readers = flags & Self::NUM_READERS_MASK;
-            let writers = (flags & Self::NUM_WRITERS_MASK) >> Self::WRITERS_BITS_SHIFT;
-
-            if readers > 0 || writers > 0 {
-                if backoff.is_none() {
-                    backoff = Some(Contender::new());
-                }
-
-
-                let backoff_mut_ref = unsafe { backoff.as_mut().unwrap_unchecked() };
-                if backoff_mut_ref.is_completed() {
-                    //println!("locked in write");
-                }
-                backoff_mut_ref.snooze();
-
-                flags = self.flags.load(Ordering::SeqCst);
-            } else {
-                let writers = (((flags & CASAccessControl::NUM_WRITERS_MASK)
-                    >> Self::WRITERS_BITS_SHIFT)
-                    + 1)
-                    << Self::WRITERS_BITS_SHIFT;
-                let new_flags = (flags & !CASAccessControl::NUM_WRITERS_MASK) | writers;
-
-                if let Err(err_flags) = self.flags.compare_exchange(
-                    flags,
-                    new_flags,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                ) {
-                    flags = err_flags;
-                } else {
-                    break;
-                }
-            }
+impl Default for CASAccessControl {
+    fn default() -> Self {
+        Self {
+            read_flags: Default::default(),
+            write_slots: Default::default(),
+            next_writer_id: Default::default(),
+            pending_writers: Default::default(),
+            is_writing: Default::default(),
+            max_write_line: 1,
         }
-
-        CASWriteGuard::new(self)
-    }
-
-    // TODO: Algorithm for concurrency control (delay reads or writes)
-    // Control how much pending writes could be when to reduce reads
-    // Control how much pending reads could be when to reduce writes
-
-    fn read(&self) -> impl AccessGuard {
-        let mut flags = self.flags.load(Ordering::SeqCst);
-        let mut backoff: Option<Contender> = None;
-
-        // Remove from pending when successful (else branch)
-        loop {
-            let writers = (flags & Self::NUM_WRITERS_MASK) >> Self::WRITERS_BITS_SHIFT;
-            if writers > 0 {
-                if backoff.is_none() {
-                    backoff = Some(Contender::new());
-                }
-
-                let backoff_mut_ref = unsafe { backoff.as_mut().unwrap_unchecked() };
-                if backoff_mut_ref.is_completed() {
-                    //println!("locked in write");
-                }
-                backoff_mut_ref.snooze();
-
-                flags = self.flags.load(Ordering::SeqCst);
-            } else {
-                let readers = (flags & Self::NUM_READERS_MASK) + 1;
-                let new_flags = (flags & !CASAccessControl::NUM_READERS_MASK) | readers;
-
-                if let Err(err_flags) = self.flags.compare_exchange(
-                    flags,
-                    new_flags,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                ) {
-                    flags = err_flags;
-                } else {
-                    break;
-                }
-            }
-        }
-
-        CASReadGuard::new(self)
-    }
-
-    fn increment_version(&self) -> u32 {
-        1
     }
 }
 
 impl CASAccessControl {
-    const NUM_READERS_MASK: u64 = 0x0000_0000_0000_FFFF;
+    pub fn new(max_write_line: u16) -> Self {
+        assert!(max_write_line > 0);
+        Self {
+            max_write_line,
+            ..Default::default()
+        }
+    }
 
-    pub(crate) const NUM_WRITERS_MASK: u64 = 0x0000_0000_FFFF_0000;
+    // TODO: ABA Problem?
+    fn inc_pending_writers(&self) {
+        self.pending_writers.fetch_add(1, Ordering::SeqCst);
+    }
 
-    const PENDING_NUM_READERS_MASK: u64 = 0x0000_FFFF_0000_0000;
+    fn inc_pending_readers(&self) {
+        self.read_flags
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
+                let pending_readers_flag = (((old & 0x0000_0000_FFFF_0000) >> 16) + 1) << 16;
+                Some((old & !0x0000_0000_FFFF_0000) | pending_readers_flag)
+            })
+            .expect("Always pending writers must be incremented");
+    }
 
-    pub(crate) const PENDING_NUM_WRITERS_MASK: u64 = 0xFFFF_0000_0000_0000;
+    fn dec_pending_writers(&self) {
+        self.pending_writers.fetch_sub(1, Ordering::SeqCst);
+    }
 
-    pub(crate) const WRITERS_BITS_SHIFT: u64 = 16;
-    pub(crate) const PENDING_READERS_BITS_SHIFT: u64 = 32;
-    pub(crate) const PENDING_WRITERS_BITS_SHIFT: u64 = 48;
+    fn try_reserve_write_slot(&self) -> Option<u16> {
+        if let Ok(current_slot) =
+            self.write_slots
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |slots| {
+                    if slots <= 1 { None } else { Some(slots - 1) }
+                })
+        {
+            Some(current_slot - 1)
+        } else {
+            None
+        }
+    }
+
+    fn try_reserve_read_slot(&self) -> bool {
+        // Should increment readers, decrement pending readers and decrement slot if not zero
+
+        let result = self
+            .read_flags
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
+                let readers_slots = (old & 0xFFFF_FFFF_0000_0000) >> 32;
+                if readers_slots == 0 {
+                    None
+                } else {
+                    let readers_slots_flag = (readers_slots - 1) << 32;
+                    let pending_readers_flag = (((old & 0x0000_0000_FFFF_0000) >> 16) - 1) << 16;
+                    let readers_flag = (old & 0x0000_0000_0000_FFFF) + 1;
+
+                    Some(readers_slots_flag | pending_readers_flag | readers_flag)
+                }
+            });
+        result.is_ok()
+    }
+
+    fn initialize_read_slots(&self, slots_size: u64) {
+        self.read_flags
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
+                Some(old | (slots_size << 32))
+            })
+            .expect("Always read slots must be initialized");
+    }
+
+    fn initialize_read(&self) {
+        self.read_flags
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
+                let pending_readers_flag = (((old & 0x0000_0000_FFFF_0000) >> 16) - 1) << 16;
+                let readers_flag = (old & 0x0000_0000_0000_FFFF) + 1;
+                Some((old & !0x0000_0000_FFFF_FFFF) | pending_readers_flag | readers_flag)
+            })
+            .expect("Always pending writers must be incremented");
+    }
+
+    fn reset_read(&self) {
+        self.read_flags
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
+                let pending_readers_flag = (((old & 0x0000_0000_FFFF_0000) >> 16) + 1) << 16;
+                let readers_flag = (old & 0x0000_0000_0000_FFFF) - 1;
+                Some((old & !0x0000_0000_FFFF_FFFF) | pending_readers_flag | readers_flag)
+            })
+            .expect("Always pending writers must be incremented");
+    }
+
+    fn try_init_write_slot(&self, slots_size: u16) -> bool {
+        let result =
+            self.write_slots
+                .compare_exchange(0, slots_size, Ordering::SeqCst, Ordering::SeqCst);
+        result.is_ok()
+    }
+}
+
+impl AtomicAccessControl for CASAccessControl {
+    fn write(&self) -> impl AccessGuard {
+        self.inc_pending_writers();
+
+        let mut slot_idx = 0;
+        let mut initiator = false;
+        let mut backoff: Option<Contender> = None;
+
+        // Initialize Write Phase.
+        loop {
+            if self.is_writing.load(Ordering::SeqCst) {
+                //[1..=SLOTS_SIZE]
+                if let Some(val) = self.try_reserve_write_slot() {
+                    slot_idx = val;
+                    break;
+                }
+            } else {
+                let pending_writers = self.pending_writers.load(Ordering::SeqCst);
+                let slots_size = pending_writers.min(self.max_write_line);
+                initiator = self.try_init_write_slot(slots_size);
+
+                if initiator {
+                    slot_idx = slots_size;
+                    self.next_writer_id.store(slot_idx, Ordering::SeqCst);
+                    self.is_writing.store(true, Ordering::SeqCst);
+                    break;
+                }
+            }
+
+            if backoff.is_none() {
+                backoff = Some(Contender::new());
+            }
+
+            let backoff_mut_ref = unsafe { backoff.as_mut().unwrap_unchecked() };
+            backoff_mut_ref.snooze();
+        }
+
+        // Decrement pending writer here.
+        self.dec_pending_writers();
+
+        // Instead to initialize guaranteed read slots at the last write, initialize after writing flag to true to know how much time await to start writing. (Initiator).
+        // Only initiator wait to read full finished, the others will wait until his turn.
+        if initiator {
+            let pending_readers =
+                (self.read_flags.load(Ordering::SeqCst) & 0x0000_0000_FFFF_0000) >> 16;
+            if pending_readers > 0 {
+                self.initialize_read_slots(pending_readers);
+            }
+
+            loop {
+                let readers_flag = self.read_flags.load(Ordering::SeqCst);
+
+                let readers = readers_flag & 0x0000_0000_0000_FFFF;
+                let read_slots = (readers_flag & 0xFFFF_FFFF_0000_0000) >> 32;
+
+                if readers == 0 && read_slots == 0 {
+                    break;
+                }
+
+                if backoff.is_none() {
+                    backoff = Some(Contender::new());
+                }
+
+                let backoff_mut_ref = unsafe { backoff.as_mut().unwrap_unchecked() };
+                backoff_mut_ref.snooze();
+            }
+
+            // At what point i need to wait until reach.
+        } else {
+            // Waiting turn change
+            while self.next_writer_id.load(Ordering::SeqCst) != slot_idx {
+                if backoff.is_none() {
+                    backoff = Some(Contender::new());
+                }
+
+                let backoff_mut_ref = unsafe { backoff.as_mut().unwrap_unchecked() };
+                backoff_mut_ref.snooze();
+            }
+        }
+
+        // Reduce writer_slots when write guard is dropped.
+        // If slot_idx = 1... then must to put write flag to false.
+
+        CASWriteGuard::new(self)
+    }
+
+    fn read(&self) -> impl AccessGuard {
+        self.inc_pending_readers();
+        let mut backoff: Option<Contender> = None;
+        loop {
+            let is_writing = self.is_writing.load(Ordering::SeqCst);
+            if is_writing {
+                if self.try_reserve_read_slot() {
+                    break;
+                }
+            } else {
+                self.initialize_read();
+                // Stale Read due to change. Must to try get slot.
+                if !self.is_writing.load(Ordering::SeqCst) {
+                    break;
+                }
+
+                // Reset and continue to try reserve slot. Avoid wait-free algorithm race conditions...
+                self.reset_read();
+            }
+
+            if backoff.is_none() {
+                backoff = Some(Contender::new());
+            }
+
+            let backoff_mut_ref = unsafe { backoff.as_mut().unwrap_unchecked() };
+            backoff_mut_ref.snooze();
+        }
+
+        CASReadGuard::new(self)
+    }
 }

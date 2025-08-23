@@ -14,10 +14,6 @@ impl AtomicAccessControl for LockAccessControl {
     fn read(&self) -> impl AccessGuard {
         self.lock.read().expect("Always lock is locked")
     }
-
-    fn increment_version(&self) -> u32 {
-        1
-    }
 }
 
 impl AccessGuard for RwLockWriteGuard<'_, ()> {}

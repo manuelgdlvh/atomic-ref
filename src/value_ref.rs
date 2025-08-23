@@ -5,21 +5,19 @@ use crate::sync::{AtomicU16, Ordering};
 #[derive(Debug)]
 pub struct ValueRefInner<T> {
     pub(crate) data: T,
-    version: u32,
     pub(crate) refs: AtomicU16,
 }
 
 impl<T> ValueRefInner<T> {
-    fn new(data: T, version: u32) -> Self {
+    fn new(data: T) -> Self {
         Self {
             data,
-            version,
             refs: AtomicU16::new(1),
         }
     }
 
-    pub fn raw(value: T, version: u32) -> *mut ValueRefInner<T> {
-        let result = ValueRefInner::new(value, version);
+    pub fn raw(value: T) -> *mut ValueRefInner<T> {
+        let result = ValueRefInner::new(value);
         let raw_ptr = crate::mem::allocate(result);
         raw_ptr
     }
@@ -58,8 +56,5 @@ impl<T: Debug> ValueRef<T> {
     }
     pub fn get(&self) -> &T {
         &self.as_ref().data
-    }
-    pub fn version(&self) -> u32 {
-        self.as_ref().version
     }
 }
