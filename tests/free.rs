@@ -13,9 +13,6 @@ use std::sync::Arc;
 #[cfg(not(loom))]
 use std::thread;
 
-#[cfg(not(loom))]
-use std::thread::JoinHandle;
-
 #[cfg(loom)]
 pub(crate) use loom::alloc::Layout;
 #[cfg(loom)]
@@ -26,13 +23,15 @@ use loom::sync::Arc;
 use loom::thread;
 #[cfg(loom)]
 use loom::thread::JoinHandle;
+use proptest::proptest;
+#[cfg(not(loom))]
+use std::thread::JoinHandle;
 
 // Due to proptest allocations
 const EXTRA_ALLOCS: usize = 1;
 
 // NOTE: At the moment this tests only can be executed with cargo test -- --test-threads=1
 
-/*
 proptest! {
 
     #[cfg(not(loom))]
@@ -49,29 +48,6 @@ proptest! {
     }
 
 }
- */
-
-/*
-
-
-
-#[test]
-fn test_atomic_lock_memory_free() {
-    execute_u64(Atomic::new_lock(0), 12, 8, 1000000)
-}
-
-
- */
-
-#[test]
-fn test_atomic_cas_memory_free() {
-    execute_u64(Atomic::new_cas(0, 10000), 12, 8, 1000000)
-}
-
-// TODO: Test with ArcSwap
-// TODO: Check overall algorithm
-// TODO: Relax ordering constraints
-// TODO: Track also in the test how much reads are done to see the real performance benefit also at read time.
 
 #[cfg(loom)]
 #[test]
@@ -170,16 +146,19 @@ fn init_readers<T: Debug + 'static, A: AtomicAccessControl + Send + Sync + 'stat
     stop_fn: fn(ValueRef<T>, u64) -> bool,
 ) -> Vec<JoinHandle<()>> {
     (0..num)
-        .map(|_| {
+        .map(|idx| {
             let target = Arc::clone(&target);
             thread::spawn(move || {
+                let mut i = 0;
                 loop {
                     if stop_fn(target.read(), total_writes) {
                         break;
                     }
-
+                    i += 1;
                     thread::yield_now();
                 }
+
+                println!("#{} Read Worker finished!. Reads: {}", idx, i);
             })
         })
         .collect::<Vec<_>>()
