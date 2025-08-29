@@ -1,5 +1,4 @@
 use lib::atomic::Atomic;
-use lib::value_ref::ValueRef;
 use std::alloc::{GlobalAlloc, System};
 use std::fmt::Debug;
 
@@ -26,11 +25,6 @@ use loom::thread::JoinHandle;
 use proptest::proptest;
 #[cfg(not(loom))]
 use std::thread::JoinHandle;
-
-// Due to proptest allocations
-const EXTRA_ALLOCS: usize = 1;
-
-// NOTE: At the moment this tests only can be executed with cargo test -- --test-threads=1
 
 proptest! {
 
@@ -63,7 +57,7 @@ fn execute_u64<A: AtomicAccessControl + Send + Sync + 'static>(
     num_writers: u8,
     num_worker_writes: u64,
 ) {
-    let stop_fn = |val: ValueRef<u64>, total_writes: u64| total_writes.eq(val.get());
+    let stop_fn = |val: Arc<u64>, total_writes: u64| total_writes.eq(val.as_ref());
     let write_fn = |val: &u64| val + 1;
 
     let result = execute(
@@ -75,7 +69,7 @@ fn execute_u64<A: AtomicAccessControl + Send + Sync + 'static>(
         write_fn,
     );
 
-    assert_eq!(num_writers as u64 * num_worker_writes, result)
+    assert_eq!(num_writers as u64 * num_worker_writes, *result)
 }
 
 fn execute<T: Clone + Debug + 'static, A: AtomicAccessControl + Send + Sync + 'static>(
@@ -83,9 +77,9 @@ fn execute<T: Clone + Debug + 'static, A: AtomicAccessControl + Send + Sync + 's
     num_readers: u8,
     num_writers: u8,
     num_worker_writes: u64,
-    stop_fn: fn(ValueRef<T>, u64) -> bool,
+    stop_fn: fn(Arc<T>, u64) -> bool,
     write_fn: fn(&T) -> T,
-) -> T {
+) -> Arc<T> {
     #[cfg(not(loom))]
     GLOBAL_ALLOCATOR.reset();
 
@@ -105,12 +99,12 @@ fn execute<T: Clone + Debug + 'static, A: AtomicAccessControl + Send + Sync + 's
         let _ = handle.join();
     });
 
-    let result = target.read().get().clone();
+    let result = target.read();
     drop(target);
 
     #[cfg(not(loom))]
     assert_eq!(
-        GLOBAL_ALLOCATOR.allocs.load(Ordering::Relaxed) + EXTRA_ALLOCS,
+        GLOBAL_ALLOCATOR.allocs.load(Ordering::Relaxed),
         GLOBAL_ALLOCATOR.deallocs.load(Ordering::Relaxed)
     );
 
@@ -143,7 +137,7 @@ fn init_readers<T: Debug + 'static, A: AtomicAccessControl + Send + Sync + 'stat
     target: Arc<Atomic<T, A>>,
     num: u8,
     total_writes: u64,
-    stop_fn: fn(ValueRef<T>, u64) -> bool,
+    stop_fn: fn(Arc<T>, u64) -> bool,
 ) -> Vec<JoinHandle<()>> {
     (0..num)
         .map(|idx| {

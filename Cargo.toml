@@ -10,8 +10,7 @@ crossbeam-utils = "0.8.21"
 
 [dev-dependencies]
 proptest = "1.7.0"
-rand = "0.9.2"
-
+criterion = "0.7.0"
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7.2", features = ["checkpoint"] }
@@ -21,5 +20,10 @@ name = "lib"
 path = "src/lib.rs"
 
 [[example]]
-name = "example-test"
+name = "example"
 path = "examples/example.rs"
+
+
+[[bench]]
+name = "write"
+harness = false
