@@ -1,6 +1,8 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use arc_swap::ArcSwap;
+use criterion::{Criterion, criterion_group, criterion_main};
 use lib::access::AtomicAccessControl;
 use lib::atomic::Atomic;
+use proptest::prelude::Strategy;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::thread;
@@ -94,15 +96,64 @@ fn init_readers<T: Debug + 'static, A: AtomicAccessControl + Send + Sync + 'stat
 
 fn cas_write(c: &mut Criterion) {
     c.bench_function("Atomic Ref - CAS Access Control", |b| {
-        b.iter(|| execute_u64(Atomic::new_cas(0, u16::MAX), 5, 5, 10000));
+        b.iter(|| execute_u64(Atomic::new_cas(0, u16::MAX), 20, 8, 50000));
     });
 }
 
 fn lock_write(c: &mut Criterion) {
     c.bench_function("Atomic Ref - Lock Access Control", |b| {
-        b.iter(|| execute_u64(Atomic::new_lock(0), 5, 5, 10000));
+        b.iter(|| execute_u64(Atomic::new_lock(0), 20, 8, 50000));
     });
 }
 
-criterion_group!(benches, cas_write, lock_write);
+fn arc_swap_write(c: &mut Criterion) {
+    c.bench_function("Arc Swap", |b| {
+        let readers = 20;
+        let writers = 8;
+        let writes_per_worker = 50000;
+
+        b.iter(|| {
+            let target = Arc::new(ArcSwap::from_pointee(0));
+            let readers: Vec<JoinHandle<()>> = (0..readers)
+                .map(|idx| {
+                    let target = Arc::clone(&target);
+                    thread::spawn(move || {
+                        loop {
+                            if *target.load_full() == (writes_per_worker * writers) {
+                                break;
+                            }
+
+                            thread::yield_now();
+                        }
+                    })
+                })
+                .collect();
+
+            let writers: Vec<JoinHandle<()>> = (0..writers)
+                .map(|idx| {
+                    let target = Arc::clone(&target);
+                    thread::spawn(move || {
+                        let mut i = 0;
+
+                        while (i < writes_per_worker) {
+                            target.rcu(|val| **val + 1);
+
+                            i += 1;
+                        }
+                    })
+                })
+                .collect();
+
+            readers.into_iter().for_each(|reader| {
+                reader.join().unwrap();
+            });
+
+            writers.into_iter().for_each(|writer| {
+                writer.join().unwrap();
+            });
+        });
+    });
+}
+
+criterion_group!(benches, cas_write, arc_swap_write, lock_write);
 criterion_main!(benches);
