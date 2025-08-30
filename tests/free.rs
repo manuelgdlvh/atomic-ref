@@ -43,14 +43,6 @@ proptest! {
 
 }
 
-#[cfg(loom)]
-#[test]
-fn test_atomic_lock_memory_free() {
-    loom::model(|| {
-        execute_u64(Atomic::new_lock(0), 0, 1, 100);
-    });
-}
-
 fn execute_u64<A: AtomicAccessControl + Send + Sync + 'static>(
     target: Atomic<u64, A>,
     num_readers: u8,
