@@ -1,9 +1,9 @@
 use crate::access::AtomicAccessControl;
 use crate::access::cas::CASAccessControl;
 use crate::access::lock::LockAccessControl;
+use crate::sync::Arc;
 use crate::sync::{AtomicPtr, Ordering};
 use std::fmt::Debug;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 static ATOMIC_ID_GEN: AtomicU64 = AtomicU64::new(0);
