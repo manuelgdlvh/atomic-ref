@@ -96,7 +96,7 @@ fn init_readers<T: Debug + 'static, A: AtomicAccessControl + Send + Sync + 'stat
 
 fn cas_write(c: &mut Criterion) {
     c.bench_function("Atomic Ref - CAS Access Control", |b| {
-        b.iter(|| execute_u64(Atomic::new_cas(0, u16::MAX), 20, 8, 50000));
+        b.iter(|| execute_u64(Atomic::new_cas(0, u16::MAX), 8, 8, 50000));
     });
 }
 
@@ -155,5 +155,5 @@ fn arc_swap_write(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, cas_write, arc_swap_write, lock_write);
+criterion_group!(benches, cas_write);
 criterion_main!(benches);
