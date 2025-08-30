@@ -183,16 +183,28 @@ impl CASAccessControl {
             .expect("Always pending writers must be incremented");
     }
 
-    fn reset_read(&self) {
-        self.read_flags
+    fn try_reserve_read_slot_or_reset(&self) -> bool {
+        let old_read_flags = self
+            .read_flags
             .fetch_update(Ordering::Release, Ordering::Acquire, |old| {
-                let pending_readers_flag =
-                    (((old & PENDING_READERS_MASK) >> PENDING_READERS_SHIFT) + 1)
-                        << PENDING_READERS_SHIFT;
-                let readers_flag = (old & ACTIVE_READERS_MASK) - 1;
-                Some((old & NOT_ACTIVE_PENDING_READERS_MASK) | pending_readers_flag | readers_flag)
+                let readers_slots = (old & READ_SLOTS_MASK) >> READ_SLOTS_SHIFT;
+                if readers_slots == 0 {
+                    let pending_readers_flag =
+                        (((old & PENDING_READERS_MASK) >> PENDING_READERS_SHIFT) + 1)
+                            << PENDING_READERS_SHIFT;
+                    let readers_flag = (old & ACTIVE_READERS_MASK) - 1;
+                    Some(
+                        (old & NOT_ACTIVE_PENDING_READERS_MASK)
+                            | pending_readers_flag
+                            | readers_flag,
+                    )
+                } else {
+                    Some((old & !READ_SLOTS_MASK) | ((readers_slots - 1) << READ_SLOTS_SHIFT))
+                }
             })
             .expect("Always pending writers must be incremented");
+
+        (old_read_flags & READ_SLOTS_MASK) >> READ_SLOTS_SHIFT != 0
     }
 
     fn init_write_slot(&self, slots_size: u16) {
@@ -204,34 +216,32 @@ impl AtomicAccessControl for CASAccessControl {
     fn write(&self) -> impl AccessGuard {
         self.inc_pending_writers();
 
-        let mut slot_idx = 0;
-        let mut initiator = false;
+        let slot_idx;
+        let initiator;
         let mut backoff = BackOffStrategy::default();
 
         // Initialize Write Phase.
         loop {
             if self.is_writing.load(Ordering::Acquire) {
-                //[1..=SLOTS_SIZE]
+                // [1..=SLOTS_SIZE]
                 if let Some(val) = self.try_reserve_write_slot() {
                     slot_idx = val;
+                    initiator = false;
                     break;
                 }
-            } else {
-                initiator = !self.is_writing.swap(true, Ordering::Release);
-                if initiator {
-                    // Relaxed?
-                    let pending_writers = self.pending_writers.load(Ordering::Acquire);
-                    let slots_size = pending_writers.min(self.max_write_line);
+            } else if !self.is_writing.swap(true, Ordering::Acquire) {
+                initiator = true;
+                let pending_writers = self.pending_writers.load(Ordering::Acquire);
+                let slots_size = pending_writers.min(self.max_write_line);
 
-                    // Minus 1 to guarantee the initiator slot.
-                    self.init_write_slot(slots_size - 1);
-                    slot_idx = slots_size;
-                    self.next_writer_id.store(slot_idx, Ordering::Release);
-                    break;
-                } else if let Some(val) = self.try_reserve_write_slot() {
-                    slot_idx = val;
-                    break;
-                }
+                self.init_write_slot(slots_size - 1);
+                slot_idx = slots_size;
+                self.next_writer_id.store(slot_idx, Ordering::Release);
+                break;
+            } else if let Some(val) = self.try_reserve_write_slot() {
+                slot_idx = val;
+                initiator = false;
+                break;
             }
 
             backoff.wait();
@@ -242,7 +252,7 @@ impl AtomicAccessControl for CASAccessControl {
         // Instead to initialize guaranteed read slots at the last write, initialize after writing flag to true to know how much time await to start writing. (Initiator).
         // Only initiator wait to read full finished, the others will wait until his turn.
         if initiator {
-            let pending_readers = (self.read_flags.load(Ordering::Relaxed) & PENDING_READERS_MASK)
+            let pending_readers = (self.read_flags.load(Ordering::Acquire) & PENDING_READERS_MASK)
                 >> PENDING_READERS_SHIFT;
             if pending_readers > 0 {
                 self.initialize_read_slots(pending_readers);
@@ -273,21 +283,18 @@ impl AtomicAccessControl for CASAccessControl {
         self.inc_pending_readers();
         let mut backoff = BackOffStrategy::default();
         loop {
-            let is_writing = self.is_writing.load(Ordering::Acquire);
-            if is_writing {
+            if self.is_writing.load(Ordering::Acquire) {
                 if self.try_reserve_read_slot() {
                     break;
                 }
             } else {
                 self.initialize_read();
 
-                // Stale Read due to change. Must to try get slot.
-                if !self.is_writing.load(Ordering::Acquire) {
+                // Stale Read due to change. Must try get slot.
+                if !self.is_writing.load(Ordering::Acquire) || self.try_reserve_read_slot_or_reset()
+                {
                     break;
                 }
-
-                // Reset and continue to try reserve slot. Avoid wait-free algorithm race conditions...
-                self.reset_read();
             }
 
             backoff.wait();

@@ -1,10 +1,10 @@
+use crate::access::AtomicAccessControl;
 use crate::access::cas::CASAccessControl;
 use crate::access::lock::LockAccessControl;
-use crate::access::AtomicAccessControl;
 use crate::sync::{AtomicPtr, Ordering};
 use std::fmt::Debug;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 static ATOMIC_ID_GEN: AtomicU64 = AtomicU64::new(0);
 
@@ -67,6 +67,11 @@ impl<T: Debug, A: AtomicAccessControl> Atomic<T, A> {
             out
         }
     }
+
+    // TODO: To think about it (Improve reads in the case references are used-dropped entering in the new access_control model):
+    // Writes like a continuous sequential writers handling fairness with writer_id
+    // Writers do best effort to clean unstable references from the bucket (not reachable by readers and with refCount = 1).
+    // If tracked references reach some limit, current read / write model must be used.
 
     pub fn write<F>(&self, update_fn: F)
     where

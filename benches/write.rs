@@ -82,13 +82,18 @@ fn init_readers<T: Debug + 'static, A: AtomicAccessControl + Send + Sync + 'stat
         .map(|idx| {
             let target = Arc::clone(&target);
             thread::spawn(move || {
+                let mut i = 0;
                 loop {
                     if stop_fn(target.read(), total_writes) {
                         break;
                     }
 
                     thread::yield_now();
+
+                    i += 1;
                 }
+
+                println!("{} reads", i);
             })
         })
         .collect::<Vec<_>>()
@@ -108,7 +113,7 @@ fn lock_write(c: &mut Criterion) {
 
 fn arc_swap_write(c: &mut Criterion) {
     c.bench_function("Arc Swap", |b| {
-        let readers = 20;
+        let readers = 8;
         let writers = 8;
         let writes_per_worker = 50000;
 
@@ -118,13 +123,17 @@ fn arc_swap_write(c: &mut Criterion) {
                 .map(|idx| {
                     let target = Arc::clone(&target);
                     thread::spawn(move || {
+                        let mut i = 0;
                         loop {
                             if *target.load_full() == (writes_per_worker * writers) {
                                 break;
                             }
 
                             thread::yield_now();
+                            i += 1;
                         }
+
+                        println!("{} reads", i);
                     })
                 })
                 .collect();
@@ -155,5 +164,5 @@ fn arc_swap_write(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, cas_write);
+criterion_group!(benches, arc_swap_write, cas_write);
 criterion_main!(benches);
