@@ -11,8 +11,6 @@ use std::{
     thread,
 };
 
-use arc_swap::ArcSwap;
-
 use crate::{access::AtomicAccessControl, atomic::Atomic};
 
 #[derive(Copy)]
@@ -209,6 +207,10 @@ pub trait ReadWriteExt<I: Debug + Send + Sync>: Send + Sync {
     fn write_fn(&self, fn_ptr: fn(&I) -> I);
 }
 
+#[cfg(feature = "benches")]
+use arc_swap::ArcSwap;
+
+#[cfg(feature = "benches")]
 impl<I: Debug + Send + Sync> ReadWriteExt<I> for ArcSwap<I> {
     fn read(&self) -> Arc<I> {
         self.load_full()
