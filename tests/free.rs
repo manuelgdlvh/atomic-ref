@@ -5,9 +5,9 @@ use std::fmt::Debug;
 #[cfg(not(loom))]
 pub(crate) use std::alloc::Layout;
 #[cfg(not(loom))]
-use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(not(loom))]
 use std::sync::Arc;
+#[cfg(not(loom))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(not(loom))]
 use std::thread;
 
@@ -15,9 +15,9 @@ use lib::access::AtomicAccessControl;
 #[cfg(loom)]
 pub(crate) use loom::alloc::Layout;
 #[cfg(loom)]
-use loom::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(loom)]
 use loom::sync::Arc;
+#[cfg(loom)]
+use loom::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(loom)]
 use loom::thread;
 #[cfg(loom)]
@@ -26,6 +26,7 @@ use proptest::proptest;
 #[cfg(not(loom))]
 use std::thread::JoinHandle;
 
+// TODO: Integrate with the new test suite and add logic to the allocator to differ between de/allocations of distinct test suites (must know each thread_id which suite belongs)
 proptest! {
 
     #[cfg(not(loom))]

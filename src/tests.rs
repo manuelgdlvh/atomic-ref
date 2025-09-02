@@ -15,17 +15,41 @@ use arc_swap::ArcSwap;
 
 use crate::{access::AtomicAccessControl, atomic::Atomic};
 
-#[derive(Clone)]
-pub enum ReadTask<I: Clone + Debug> {
+#[derive(Copy)]
+pub enum ReadTask<I: Debug + Send + Sync> {
     Simple { stop_fn: fn(&I) -> bool },
+    TargetHits { hits: usize },
     Stop,
 }
 
-#[derive(Clone, Copy)]
-pub enum WriteTask<I: Clone + Debug> {
+impl<I: Debug + Send + Sync> Clone for ReadTask<I> {
+    fn clone(&self) -> Self {
+        match self {
+            ReadTask::Simple { stop_fn } => ReadTask::Simple { stop_fn: *stop_fn },
+            ReadTask::TargetHits { hits } => ReadTask::TargetHits { hits: *hits },
+            ReadTask::Stop => ReadTask::Stop,
+        }
+    }
+}
+
+#[derive(Copy)]
+pub enum WriteTask<I: Debug + Send + Sync> {
     Simple { num_execs: usize, task: fn(&I) -> I },
     Reset,
     Stop,
+}
+
+impl<I: Debug + Send + Sync> Clone for WriteTask<I> {
+    fn clone(&self) -> Self {
+        match self {
+            WriteTask::Reset => WriteTask::Reset,
+            WriteTask::Simple { num_execs, task } => WriteTask::Simple {
+                num_execs: *num_execs,
+                task: *task,
+            },
+            WriteTask::Stop => WriteTask::Stop,
+        }
+    }
 }
 
 pub enum TaskResult {
@@ -33,13 +57,13 @@ pub enum TaskResult {
     SimpleWriteDone,
 }
 
-pub struct RuntimeHandle<I: Clone + Debug> {
+pub struct RuntimeHandle<I: Debug + Send + Sync> {
     readers: Vec<SyncSender<ReadTask<I>>>,
     writers: Vec<SyncSender<WriteTask<I>>>,
     res_recv: Receiver<TaskResult>,
 }
 
-impl<I: Clone + Debug> RuntimeHandle<I> {
+impl<I: Debug + Send + Sync> RuntimeHandle<I> {
     pub fn new(num_readers: usize, num_writers: usize) -> (Self, SyncSender<TaskResult>) {
         let (res_tx, res_rx) = mpsc::sync_channel(num_readers + num_writers);
 
@@ -87,7 +111,7 @@ impl<I: Clone + Debug> RuntimeHandle<I> {
     }
 }
 
-impl<I: Clone + Debug> Drop for RuntimeHandle<I> {
+impl<I: Debug + Send + Sync> Drop for RuntimeHandle<I> {
     fn drop(&mut self) {
         self.readers.iter().for_each(|channel| {
             channel.send(ReadTask::Stop).expect("");
@@ -99,10 +123,7 @@ impl<I: Clone + Debug> Drop for RuntimeHandle<I> {
     }
 }
 
-pub fn runtime<
-    I: Send + Default + Clone + Debug + 'static,
-    T: ReadWriteExt<I> + Send + Sync + 'static,
->(
+pub fn runtime<I: Send + Sync + Default + Debug + 'static, T: ReadWriteExt<I> + 'static>(
     num_readers: usize,
     num_writers: usize,
     target: Arc<T>,
@@ -125,6 +146,18 @@ pub fn runtime<
                     ReadTask::Simple { stop_fn } => {
                         while !stop_fn(&target.read()) {
                             thread::yield_now();
+                        }
+
+                        res_tx.send(TaskResult::SimpleReadDone).expect("");
+                    }
+
+                    ReadTask::TargetHits { hits } => {
+                        let mut i = 0;
+                        while i < hits {
+                            std::hint::black_box({
+                                target.read();
+                            });
+                            i += 1;
                         }
 
                         res_tx.send(TaskResult::SimpleReadDone).expect("");
@@ -171,12 +204,12 @@ pub fn runtime<
     r_handle
 }
 
-pub trait ReadWriteExt<I: Debug> {
+pub trait ReadWriteExt<I: Debug + Send + Sync>: Send + Sync {
     fn read(&self) -> Arc<I>;
     fn write_fn(&self, fn_ptr: fn(&I) -> I);
 }
 
-impl<I: Debug> ReadWriteExt<I> for ArcSwap<I> {
+impl<I: Debug + Send + Sync> ReadWriteExt<I> for ArcSwap<I> {
     fn read(&self) -> Arc<I> {
         self.load_full()
     }
@@ -186,7 +219,7 @@ impl<I: Debug> ReadWriteExt<I> for ArcSwap<I> {
     }
 }
 
-impl<A: AtomicAccessControl, I: Debug> ReadWriteExt<I> for Atomic<I, A> {
+impl<A: AtomicAccessControl, I: Debug + Send + Sync> ReadWriteExt<I> for Atomic<I, A> {
     fn read(&self) -> Arc<I> {
         self.read()
     }

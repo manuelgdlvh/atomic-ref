@@ -15,7 +15,7 @@ criterion = "0.7.0"
 
 
 [features]
-testing = ["dep:arc-swap"]
+benches = ["dep:arc-swap"]
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7.2", features = ["checkpoint"] }
@@ -32,3 +32,9 @@ path = "examples/example.rs"
 [[bench]]
 name = "write"
 harness = false
+required-features = ["benches"]
+
+[[bench]]
+name = "read"
+harness = false
+required-features = ["benches"]
