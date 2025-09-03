@@ -4,40 +4,45 @@
 
 use std::{
     fmt::Debug,
+    mem,
     sync::{
         Arc,
         mpsc::{self, Receiver, SyncSender},
     },
-    thread,
+    thread::{self, JoinHandle},
 };
 
 use crate::{access::AtomicAccessControl, atomic::Atomic};
 
-#[derive(Copy)]
-pub enum ReadTask<I: Debug + Send + Sync> {
-    Simple { stop_fn: fn(&I) -> bool },
-    TargetHits { hits: usize },
+pub enum ReadTask<I: Debug + Send> {
+    ReadUntil {
+        stop_fn: Arc<dyn Fn(&I) -> bool + Send + Sync>,
+    },
+    TargetHits {
+        hits: usize,
+    },
     Stop,
 }
 
-impl<I: Debug + Send + Sync> Clone for ReadTask<I> {
+impl<I: Debug + Send> Clone for ReadTask<I> {
     fn clone(&self) -> Self {
         match self {
-            ReadTask::Simple { stop_fn } => ReadTask::Simple { stop_fn: *stop_fn },
+            ReadTask::ReadUntil { stop_fn } => ReadTask::ReadUntil {
+                stop_fn: stop_fn.clone(),
+            },
             ReadTask::TargetHits { hits } => ReadTask::TargetHits { hits: *hits },
             ReadTask::Stop => ReadTask::Stop,
         }
     }
 }
 
-#[derive(Copy)]
-pub enum WriteTask<I: Debug + Send + Sync> {
+pub enum WriteTask<I: Debug + Send> {
     Simple { num_execs: usize, task: fn(&I) -> I },
     Reset,
     Stop,
 }
 
-impl<I: Debug + Send + Sync> Clone for WriteTask<I> {
+impl<I: Debug + Send> Clone for WriteTask<I> {
     fn clone(&self) -> Self {
         match self {
             WriteTask::Reset => WriteTask::Reset,
@@ -50,25 +55,27 @@ impl<I: Debug + Send + Sync> Clone for WriteTask<I> {
     }
 }
 
-pub enum TaskResult {
-    SimpleReadDone,
-    SimpleWriteDone,
+pub enum TaskResult<I: Debug + Send> {
+    ReadUntil(Arc<I>),
+    Done,
 }
 
-pub struct RuntimeHandle<I: Debug + Send + Sync> {
+pub struct RuntimeHandle<I: Debug + Send> {
     readers: Vec<SyncSender<ReadTask<I>>>,
     writers: Vec<SyncSender<WriteTask<I>>>,
-    res_recv: Receiver<TaskResult>,
+    res_recv: Receiver<TaskResult<I>>,
+    workers: Vec<JoinHandle<()>>,
 }
 
-impl<I: Debug + Send + Sync> RuntimeHandle<I> {
-    pub fn new(num_readers: usize, num_writers: usize) -> (Self, SyncSender<TaskResult>) {
+impl<I: Debug + Send> RuntimeHandle<I> {
+    pub fn new(num_readers: usize, num_writers: usize) -> (Self, SyncSender<TaskResult<I>>) {
         let (res_tx, res_rx) = mpsc::sync_channel(num_readers + num_writers);
 
         let self_ = Self {
             readers: vec![],
             writers: vec![],
             res_recv: res_rx,
+            workers: vec![],
         };
 
         (self_, res_tx)
@@ -98,7 +105,11 @@ impl<I: Debug + Send + Sync> RuntimeHandle<I> {
         });
     }
 
-    pub fn recv_results(&self, expected: usize, timeout: std::time::Duration) -> Vec<TaskResult> {
+    pub fn recv_results(
+        &self,
+        expected: usize,
+        timeout: std::time::Duration,
+    ) -> Vec<TaskResult<I>> {
         (0..expected)
             .map(|_| {
                 self.res_recv
@@ -109,7 +120,7 @@ impl<I: Debug + Send + Sync> RuntimeHandle<I> {
     }
 }
 
-impl<I: Debug + Send + Sync> Drop for RuntimeHandle<I> {
+impl<I: Debug + Send> Drop for RuntimeHandle<I> {
     fn drop(&mut self) {
         self.readers.iter().for_each(|channel| {
             channel.send(ReadTask::Stop).expect("");
@@ -118,6 +129,11 @@ impl<I: Debug + Send + Sync> Drop for RuntimeHandle<I> {
         self.writers.iter().for_each(|channel| {
             channel.send(WriteTask::Stop).expect("");
         });
+
+        let workers = mem::take(&mut self.workers);
+        for worker in workers {
+            worker.join().expect("");
+        }
     }
 }
 
@@ -132,7 +148,7 @@ pub fn runtime<I: Send + Sync + Default + Debug + 'static, T: ReadWriteExt<I> + 
         let task_rx = r_handle.register_reader();
         let res_tx = res_tx.clone();
         let target = target.clone();
-        thread::spawn(move || {
+        let worker = thread::spawn(move || {
             loop {
                 match task_rx
                     .recv()
@@ -141,12 +157,18 @@ pub fn runtime<I: Send + Sync + Default + Debug + 'static, T: ReadWriteExt<I> + 
                     ReadTask::Stop => {
                         break;
                     }
-                    ReadTask::Simple { stop_fn } => {
-                        while !stop_fn(&target.read()) {
+                    ReadTask::ReadUntil { stop_fn } => {
+                        let mut last_read;
+                        loop {
+                            last_read = target.read();
+
+                            if stop_fn(&last_read) {
+                                break;
+                            }
                             thread::yield_now();
                         }
 
-                        res_tx.send(TaskResult::SimpleReadDone).expect("");
+                        res_tx.send(TaskResult::ReadUntil(last_read)).expect("");
                     }
 
                     ReadTask::TargetHits { hits } => {
@@ -158,11 +180,12 @@ pub fn runtime<I: Send + Sync + Default + Debug + 'static, T: ReadWriteExt<I> + 
                             i += 1;
                         }
 
-                        res_tx.send(TaskResult::SimpleReadDone).expect("");
+                        res_tx.send(TaskResult::Done).expect("");
                     }
                 }
             }
         });
+        r_handle.workers.push(worker);
     });
 
     (0..num_writers).for_each(|_| {
@@ -170,7 +193,7 @@ pub fn runtime<I: Send + Sync + Default + Debug + 'static, T: ReadWriteExt<I> + 
         let res_tx = res_tx.clone();
         let target = target.clone();
 
-        thread::spawn(move || {
+        let worker = thread::spawn(move || {
             loop {
                 match task_rx
                     .recv()
@@ -187,16 +210,18 @@ pub fn runtime<I: Send + Sync + Default + Debug + 'static, T: ReadWriteExt<I> + 
                             iter += 1;
                         }
 
-                        res_tx.send(TaskResult::SimpleWriteDone).expect("");
+                        res_tx.send(TaskResult::Done).expect("");
                     }
                     WriteTask::Reset => {
                         target.write_fn(|_| I::default());
 
-                        res_tx.send(TaskResult::SimpleWriteDone).expect("");
+                        res_tx.send(TaskResult::Done).expect("");
                     }
                 }
             }
         });
+
+        r_handle.workers.push(worker);
     });
 
     r_handle

@@ -30,14 +30,14 @@ fn perform<'a, T: lib::tests::ReadWriteExt<usize> + 'static>(
         let handle = runtime(READERS, WRITERS, target.clone());
 
         b.iter(|| {
-            handle.read(ReadTask::Simple {
-                stop_fn: |val: &usize| {
+            handle.read(ReadTask::ReadUntil {
+                stop_fn: Arc::new(|val: &usize| {
                     if *val == (WRITERS * WRITE_EXECS) {
                         true
                     } else {
                         false
                     }
-                },
+                }),
             });
 
             handle.write(WriteTask::Simple {
