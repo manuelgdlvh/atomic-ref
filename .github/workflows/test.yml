@@ -34,4 +34,4 @@ jobs:
       - name: Install stable
         uses: dtolnay/rust-toolchain@stable
       - name: cargo test
-        run: cargo test --release -- --test-threads=1
+        run: cargo test --release --features benches -- --test-threads=1
