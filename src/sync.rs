@@ -1,11 +1,5 @@
 #[cfg(not(loom))]
-pub(crate) use std::sync::atomic::{AtomicPtr, AtomicU16, AtomicU64, Ordering};
-
-#[cfg(not(loom))]
-pub(crate) use std::alloc::Layout;
-
-#[cfg(not(loom))]
-pub(crate) use std::alloc::{alloc, dealloc};
+pub(crate) use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
 #[cfg(not(loom))]
 pub(crate) use std::sync::Arc;
