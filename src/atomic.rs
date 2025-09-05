@@ -12,7 +12,7 @@ pub struct Atomic<T, A>
 where
     A: AtomicAccessControl,
 {
-    id: u64,
+    _id: u64,
     // Initialized refs in 1. When write happens is reduced by 1 to only in flight current reads
     current: AtomicPtr<T>,
     // Masks for readers, writers, version
@@ -36,7 +36,7 @@ impl<T: Debug> Atomic<T, CASAccessControl> {
         let raw = Arc::into_raw(Arc::new(value)) as *mut T;
 
         Atomic {
-            id: ATOMIC_ID_GEN.fetch_add(1, Ordering::Release),
+            _id: ATOMIC_ID_GEN.fetch_add(1, Ordering::Release),
             current: AtomicPtr::new(raw),
             control: CASAccessControl::new(max_write_line),
         }
@@ -48,7 +48,7 @@ impl<T: Debug> Atomic<T, LockAccessControl> {
         let raw = Arc::into_raw(Arc::new(value)) as *mut T;
 
         Atomic {
-            id: ATOMIC_ID_GEN.fetch_add(1, Ordering::Release),
+            _id: ATOMIC_ID_GEN.fetch_add(1, Ordering::Release),
             current: AtomicPtr::new(raw),
             control: LockAccessControl::default(),
         }

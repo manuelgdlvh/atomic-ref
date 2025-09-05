@@ -1,6 +1,4 @@
 // This module exposes functions to easily perform performance and correctness tests maintaining consistency across all tests.
-// This must decouple the Runtime which will execute all actions and is able to be reused (very useful for performance tests).
-// Also must be decoupled of the inner types used, for example can be used to compare against other crates.
 
 use std::{
     fmt::Debug,
@@ -254,7 +252,3 @@ impl<A: AtomicAccessControl, I: Debug + Send + Sync> ReadWriteExt<I> for Atomic<
         self.write(fn_ptr);
     }
 }
-
-// Should allow to send actions to readers and writers and get in other channel when finished the task itself.
-// For writers, pass some function and how many times this function must to be executed. And for readers, some stop_fn and perform without stop until reach the goal and send the finish result.
-// Explain here how compose both actions to reach whatever desired goal. For the cases at the moment, we need to support current performance and correctness checks developed.

@@ -8,11 +8,8 @@ pub(crate) use std::alloc::Layout;
 use std::sync::Arc;
 #[cfg(not(loom))]
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(not(loom))]
-use std::thread;
 use std::time::Duration;
 
-use lib::access::AtomicAccessControl;
 #[cfg(loom)]
 pub(crate) use loom::alloc::Layout;
 #[cfg(loom)]
@@ -24,8 +21,6 @@ use loom::thread;
 #[cfg(loom)]
 use loom::thread::JoinHandle;
 use proptest::proptest;
-#[cfg(not(loom))]
-use std::thread::JoinHandle;
 
 proptest! {
 
@@ -84,10 +79,13 @@ fn perform<T: lib::tests::ReadWriteExt<usize> + 'static>(
 
     drop(handle);
 
-    // assert_eq!(
-    //     GLOBAL_ALLOCATOR.allocs.load(Ordering::Acquire),
-    //     GLOBAL_ALLOCATOR.deallocs.load(Ordering::Acquire)
-    // );
+    assert!(
+        GLOBAL_ALLOCATOR
+            .allocs
+            .load(Ordering::Acquire)
+            .abs_diff(GLOBAL_ALLOCATOR.deallocs.load(Ordering::Acquire))
+            <= 1
+    );
 }
 
 #[cfg(not(loom))]
@@ -128,13 +126,14 @@ unsafe impl GlobalAlloc for CountingAllocator {
         self.allocs.fetch_add(1, Ordering::SeqCst);
         self.bytes_allocated
             .fetch_add(layout.size(), Ordering::SeqCst);
-        System.alloc(layout)
+        unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         self.deallocs.fetch_add(1, Ordering::SeqCst);
         self.bytes_deallocated
             .fetch_add(layout.size(), Ordering::SeqCst);
-        System.dealloc(ptr, layout)
+
+        unsafe { System.dealloc(ptr, layout) }
     }
 }
